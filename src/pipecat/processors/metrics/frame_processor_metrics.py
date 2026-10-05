@@ -260,7 +260,8 @@ class FrameProcessorMetrics(BaseObject):
 
     async def start_text_aggregation_metrics(self):
         """Start measuring text aggregation time (first token to first sentence)."""
-        self._start_text_aggregation_time = time.time()
+        if self._start_text_aggregation_time == 0:
+            self._start_text_aggregation_time = time.time()
 
     async def stop_text_aggregation_metrics(self):
         """Stop text aggregation measurement and generate metrics frame.
