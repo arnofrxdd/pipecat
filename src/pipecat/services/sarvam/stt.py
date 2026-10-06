@@ -258,6 +258,7 @@ class SarvamSTTService(STTService):
         params: InputParams | None = None,
         settings: Settings | None = None,
         ttfs_p99_latency: float | None = SARVAM_TTFS_P99,
+        stt_ttfb_timeout: float = 0.5,
         keepalive_timeout: float | None = None,
         keepalive_interval: float = 5.0,
         **kwargs,
@@ -376,6 +377,7 @@ class SarvamSTTService(STTService):
         super().__init__(
             sample_rate=sample_rate,
             ttfs_p99_latency=ttfs_p99_latency,
+            stt_ttfb_timeout=stt_ttfb_timeout,
             keepalive_timeout=keepalive_timeout,
             keepalive_interval=keepalive_interval,
             settings=default_settings,
