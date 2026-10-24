@@ -237,14 +237,19 @@ class BaseSmartTurn(BaseTurnAnalyzer):
                     e2e_processing_time_ms=e2e_processing_time_ms,
                 )
 
+                logger.info(
+                    f"[DEBUG-TRACE: SMART-TURN] ONNX evaluated audio segment ({len(segment_audio)/self.sample_rate:.2f}s in {e2e_processing_time_ms:.1f}ms): "
+                    f"probability={result['probability']:.4f} -> prediction={result['prediction']} "
+                    f"({'COMPLETE (thought finished, ending turn immediately)' if result_data.is_complete else 'INCOMPLETE (user paused mid-thought, waiting...)'})"
+                )
                 logger.trace(
                     f"Prediction: {'Complete' if result_data.is_complete else 'Incomplete'}"
                 )
                 logger.trace(f"Probability of complete: {result_data.probability:.4f}")
                 logger.trace(f"E2E processing time: {result_data.e2e_processing_time_ms:.2f}ms")
             except SmartTurnTimeoutException:
-                logger.debug(
-                    f"End of Turn complete due to stop_secs. Silence in ms: {self._silence_ms}"
+                logger.info(
+                    f"[DEBUG-TRACE: SMART-TURN] End of Turn forced complete due to stop_secs ({self._stop_ms/1000:.1f}s silence timeout reached)"
                 )
                 state = EndOfTurnState.COMPLETE
 

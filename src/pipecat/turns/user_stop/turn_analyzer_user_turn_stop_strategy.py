@@ -220,6 +220,10 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         # Sync Smart Turn pre-speech buffering with VAD start delay
         self._turn_analyzer.update_vad_start_secs(frame.start_secs)
         self._vad_user_speaking = True
+        if self._timeout_task:
+            logger.info(
+                "[DEBUG-TRACE: SMART-TURN] User resumed speaking before timeout! Extending turn and cancelling stop."
+            )
         await self._discard_pending_end_of_turn()
 
     async def _handle_vad_user_stopped_speaking(self, frame: VADUserStoppedSpeakingFrame):
@@ -356,6 +360,9 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
             if self._timeout_task:
                 await self.task_manager.cancel_task(self._timeout_task)
                 self._timeout_task = None
+            logger.info(
+                f"[DEBUG-TRACE: SMART-TURN] Turn complete & transcript finalized ('{self._text}') -> triggering turn STOPPED immediately"
+            )
             await self.trigger_user_turn_stopped()
             return
 
