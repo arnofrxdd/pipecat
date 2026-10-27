@@ -372,7 +372,8 @@ class BaseOpenAILLMService(LLMService[OpenAILLMAdapter]):
         context: LLMContext,
         max_tokens: int | None = None,
         system_instruction: str | None = None,
-    ) -> str | None:
+        return_usage: bool = False,
+    ) -> str | tuple[str | None, LLMTokenUsage | None] | None:
         """Run a one-shot, out-of-band (i.e. out-of-pipeline) inference with the given LLM context.
 
         Args:
@@ -381,9 +382,10 @@ class BaseOpenAILLMService(LLMService[OpenAILLMAdapter]):
                 overrides the service's default max_tokens/max_completion_tokens setting.
             system_instruction: Optional system instruction to use for this inference.
                 If provided, overrides any system instruction in the context.
+            return_usage: If True, returns a tuple of (content, LLMTokenUsage | None).
 
         Returns:
-            The LLM's response as a string, or None if no response is generated.
+            The LLM's response as a string, or (content, usage) if return_usage is True.
         """
         effective_instruction = system_instruction or self._settings.system_instruction
         adapter = self.get_llm_adapter()
@@ -411,7 +413,48 @@ class BaseOpenAILLMService(LLMService[OpenAILLMAdapter]):
         # LLM completion
         response = await self._client.chat.completions.create(**params)
 
-        return response.choices[0].message.content
+        content = (
+            response.choices[0].message.content
+            if (getattr(response, "choices", None) and len(response.choices) > 0)
+            else None
+        )
+
+        usage = None
+        if getattr(response, "usage", None):
+            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+            cached_tokens = getattr(prompt_details, "cached_tokens", None) if prompt_details else None
+            completion_details = getattr(response.usage, "completion_tokens_details", None)
+            reasoning_tokens = (
+                getattr(completion_details, "reasoning_tokens", None)
+                if completion_details
+                else None
+            )
+
+            usage = LLMTokenUsage(
+                prompt_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
+                total_tokens=getattr(response.usage, "total_tokens", 0) or 0,
+                cache_read_input_tokens=cached_tokens,
+                reasoning_tokens=reasoning_tokens,
+            )
+
+        if return_usage:
+            return content, usage
+        return content
+
+    async def run_inference_with_usage(
+        self,
+        context: LLMContext,
+        max_tokens: int | None = None,
+        system_instruction: str | None = None,
+    ) -> tuple[str | None, LLMTokenUsage | None]:
+        """Run a one-shot out-of-band inference returning both response content and token usage statistics."""
+        return await self.run_inference(
+            context,
+            max_tokens=max_tokens,
+            system_instruction=system_instruction,
+            return_usage=True,
+        )
 
     @traced_llm
     async def _process_context(self, context: LLMContext):
