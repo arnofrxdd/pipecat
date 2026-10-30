@@ -52,6 +52,7 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         *,
         turn_analyzer: BaseTurnAnalyzer,
         wait_for_transcript: bool = True,
+        user_speech_timeout: float = 0.0,
         **kwargs,
     ):
         """Initialize the user turn stop strategy.
@@ -70,11 +71,16 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
                 so transcripts are off the latency critical path.
                 ``LLMContextAggregatorPair`` flips this for you when
                 ``realtime_service_mode=True``.
+            user_speech_timeout: Debounce silence window in seconds to wait
+                after the user stops speaking on a complete turn before
+                triggering turn completion. Allows callers to breathe or add
+                trailing clauses without being interrupted.
             **kwargs: Additional keyword arguments.
         """
         super().__init__(**kwargs)
         self._turn_analyzer = turn_analyzer
         self._wait_for_transcript = wait_for_transcript
+        self._user_speech_timeout = float(user_speech_timeout or 0.0)
         self._stt_timeout: float = 0.0  # STT P99 latency from STTMetadataFrame
         self._stop_secs: float = 0.0  # VAD stop_secs from VADUserStoppedSpeakingFrame
 
@@ -87,6 +93,21 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._transcript_finalized = False
         self._timeout_task: asyncio.Task | None = None
         self._timeout_expired: bool = False
+
+        self._user_speech_timeout_task: asyncio.Task | None = None
+        self._user_speech_wait_done: bool = self._user_speech_timeout <= 0.0
+        self._is_silence_timeout: bool = False
+
+    @property
+    def user_speech_timeout(self) -> float:
+        """Silence debounce duration after speech before ending a complete turn."""
+        return self._user_speech_timeout
+
+    @user_speech_timeout.setter
+    def user_speech_timeout(self, value: float) -> None:
+        self._user_speech_timeout = float(value or 0.0)
+        if self._user_speech_timeout <= 0.0:
+            self._user_speech_wait_done = True
 
     @property
     def wait_for_transcript(self) -> bool:
@@ -136,9 +157,14 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._transcript_finalized = False
         self._timeout_expired = False
         self._vad_stopped = False
+        self._is_silence_timeout = False
+        self._user_speech_wait_done = self._user_speech_timeout <= 0.0
         if self._timeout_task:
             await self.task_manager.cancel_task(self._timeout_task)
             self._timeout_task = None
+        if self._user_speech_timeout_task:
+            await self.task_manager.cancel_task(self._user_speech_timeout_task)
+            self._user_speech_timeout_task = None
 
     async def setup(self, task_manager: BaseTaskManager):
         """Initialize the strategy with the given task manager.
@@ -155,6 +181,9 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         if self._timeout_task:
             await self.task_manager.cancel_task(self._timeout_task)
             self._timeout_task = None
+        if self._user_speech_timeout_task:
+            await self.task_manager.cancel_task(self._user_speech_timeout_task)
+            self._user_speech_timeout_task = None
 
     async def process_frame(self, frame: Frame) -> ProcessFrameResult:
         """Process an incoming frame to update the turn analyzer and strategy state.
@@ -213,6 +242,13 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
             _, prediction = await self._turn_analyzer.analyze_end_of_turn()
             await self._handle_prediction_result(prediction)
             self._turn_complete = True
+            # Incomplete turn silence timeout (stop_secs) reached.
+            # Override debounce floor immediately since caller already waited the full stop_secs.
+            self._is_silence_timeout = True
+            self._user_speech_wait_done = True
+            if self._user_speech_timeout_task:
+                await self.task_manager.cancel_task(self._user_speech_timeout_task)
+                self._user_speech_timeout_task = None
             await self._maybe_trigger_user_turn_stopped()
 
     async def _handle_vad_user_started_speaking(self, frame: VADUserStartedSpeakingFrame):
@@ -220,9 +256,9 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         # Sync Smart Turn pre-speech buffering with VAD start delay
         self._turn_analyzer.update_vad_start_secs(frame.start_secs)
         self._vad_user_speaking = True
-        if self._timeout_task:
+        if self._user_speech_timeout_task:
             logger.info(
-                "[DEBUG-TRACE: SMART-TURN] User resumed speaking before timeout! Extending turn and cancelling stop."
+                "[DEBUG-TRACE: SMART-TURN] User resumed speaking before debounce elapsed! Extending turn and cancelling stop."
             )
         await self._discard_pending_end_of_turn()
 
@@ -231,6 +267,12 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._vad_user_speaking = False
         self._stop_secs = frame.stop_secs
         self._vad_stopped = True
+        self._is_silence_timeout = False
+
+        if self._user_speech_timeout > 0:
+            await self._restart_user_speech_timer()
+        else:
+            self._user_speech_wait_done = True
 
         # The STT p99 budget is measured from when the user actually stopped
         # speaking, which VAD only reports stop_secs later. Anchoring the
@@ -334,6 +376,36 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._timeout_expired = True
         await self._maybe_trigger_user_turn_stopped()
 
+    async def _restart_user_speech_timer(self):
+        """Cancel any running user_speech timer and start a fresh one."""
+        if self._user_speech_timeout_task:
+            await self.task_manager.cancel_task(self._user_speech_timeout_task)
+            self._user_speech_timeout_task = None
+        self._user_speech_wait_done = False
+        self._user_speech_timeout_task = self.task_manager.create_task(
+            self._user_speech_timeout_handler(self._user_speech_timeout),
+            f"{self}::_user_speech_timeout_handler",
+        )
+
+    async def _user_speech_timeout_handler(self, timeout: float):
+        """Wait user_speech_timeout then attempt to trigger user turn stopped.
+
+        Args:
+            timeout: The timeout in seconds to wait.
+        """
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            return
+        finally:
+            self._user_speech_timeout_task = None
+
+        self._user_speech_wait_done = True
+        logger.debug(
+            f"[DEBUG-TRACE: SMART-TURN] Silence debounce elapsed ({timeout}s), evaluating turn stop."
+        )
+        await self._maybe_trigger_user_turn_stopped()
+
     async def _maybe_trigger_user_turn_stopped(self):
         """Trigger user turn stopped if conditions are met.
 
@@ -344,8 +416,33 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
           elapsed or a finalized transcript arrived.
         - When ``wait_for_transcript`` is False: fire as soon as the turn
           analyzer reports COMPLETE — independent of transcripts.
+        - When user_speech_timeout > 0: wait until debounce floor has elapsed
+          (unless this was an incomplete turn silence timeout).
         """
         if not self._turn_complete:
+            return
+
+        if self._vad_user_speaking:
+            return
+
+        # Incomplete turn silence timeout: user has already waited stop_secs (e.g. 2.0s).
+        # Trigger immediately without waiting for user_speech_timeout.
+        if self._is_silence_timeout:
+            if self._user_speech_timeout_task:
+                await self.task_manager.cancel_task(self._user_speech_timeout_task)
+                self._user_speech_timeout_task = None
+            self._user_speech_wait_done = True
+            if self._timeout_task:
+                await self.task_manager.cancel_task(self._timeout_task)
+                self._timeout_task = None
+            logger.info(
+                f"[DEBUG-TRACE: SMART-TURN] Incomplete turn silence timeout reached ({getattr(self._turn_analyzer.params, 'stop_secs', 'unknown')}s) -> triggering turn STOPPED immediately"
+            )
+            await self.trigger_user_turn_stopped()
+            return
+
+        # Complete turn: ensure the silence debounce floor has elapsed
+        if self._user_speech_timeout > 0 and not self._user_speech_wait_done:
             return
 
         if not self._wait_for_transcript:
@@ -359,14 +456,14 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         if not self._text:
             return
 
-        # For finalized transcripts, trigger immediately
+        # For finalized transcripts, trigger once debounce floor is satisfied
         if self._transcript_finalized:
             # Cancel any remaining timeout since we're triggering now
             if self._timeout_task:
                 await self.task_manager.cancel_task(self._timeout_task)
                 self._timeout_task = None
             logger.info(
-                f"[DEBUG-TRACE: SMART-TURN] Turn complete & transcript finalized ('{self._text}') -> triggering turn STOPPED immediately"
+                f"[DEBUG-TRACE: SMART-TURN] Turn complete & transcript finalized ('{self._text}') -> triggering turn STOPPED"
             )
             await self.trigger_user_turn_stopped()
             return
