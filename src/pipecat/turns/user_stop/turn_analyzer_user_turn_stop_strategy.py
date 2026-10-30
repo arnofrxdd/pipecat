@@ -298,6 +298,11 @@ class TurnAnalyzerUserTurnStopStrategy(BaseUserTurnStopStrategy):
         # This handles edge cases where transcripts arrive without VAD firing.
         # In fallback mode, reset timeout on each transcript to wait for inactivity.
         if not self._vad_user_speaking and not self._vad_stopped:
+            # If the turn analyzer has already detected speech and is actively tracking silence (e.g. for an incomplete turn),
+            # let the analyzer's own stop_secs handle turn completion instead of overriding with an immediate STT timeout.
+            if getattr(self._turn_analyzer, "speech_triggered", False):
+                return
+
             # Cancel existing fallback timeout if any
             if self._timeout_task:
                 await self.task_manager.cancel_task(self._timeout_task)
