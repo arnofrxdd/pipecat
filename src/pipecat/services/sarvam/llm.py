@@ -41,7 +41,7 @@ class SarvamLLMSettings(OpenAILLMSettings):
     """
 
     wiki_grounding: bool | None | _NotGiven = field(default_factory=lambda: _NOT_GIVEN)
-    reasoning_effort: Literal["low", "medium", "high"] | None | _NotGiven = field(
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None | _NotGiven = field(
         default_factory=lambda: _NOT_GIVEN
     )
 
