@@ -219,6 +219,9 @@ class SmallestSTTService(WebsocketSTTService):
             **kwargs,
         )
 
+        if sample_rate:
+            self._sample_rate = sample_rate
+
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._encoding = encoding
@@ -333,11 +336,12 @@ class SmallestSTTService(WebsocketSTTService):
             logger.debug("Connecting to Smallest STT")
 
             lang_code = self.language_to_service_language(self._settings.language) or "en"
+            sample_rate = self.sample_rate or self._init_sample_rate or 16000
             query_params = {
                 "model": self._settings.model,
                 "language": lang_code,
                 "encoding": self._encoding,
-                "sample_rate": str(self.sample_rate),
+                "sample_rate": str(sample_rate),
                 "word_timestamps": str(self._settings.word_timestamps).lower(),
                 "full_transcript": str(self._settings.full_transcript).lower(),
                 "sentence_timestamps": str(self._settings.sentence_timestamps).lower(),
@@ -353,10 +357,11 @@ class SmallestSTTService(WebsocketSTTService):
                 query_params["itn_normalize"] = str(self._settings.itn_normalize).lower()
             if is_given(self._settings.eou_timeout_ms) and self._settings.eou_timeout_ms is not None:
                 query_params["eou_timeout_ms"] = str(self._settings.eou_timeout_ms)
-            if is_given(self._settings.emotion_detection) and self._settings.emotion_detection is not None:
-                query_params["emotion_detection"] = str(self._settings.emotion_detection).lower()
-            if is_given(self._settings.gender_detection) and self._settings.gender_detection is not None:
-                query_params["gender_detection"] = str(self._settings.gender_detection).lower()
+            if self._settings.model == "pulse-2":
+                if is_given(self._settings.emotion_detection) and self._settings.emotion_detection is not None:
+                    query_params["emotion_detection"] = str(self._settings.emotion_detection).lower()
+                if is_given(self._settings.gender_detection) and self._settings.gender_detection is not None:
+                    query_params["gender_detection"] = str(self._settings.gender_detection).lower()
 
             # An empty `keywords` value would register a single empty keyword,
             # so omit the parameter entirely when no keywords are configured.

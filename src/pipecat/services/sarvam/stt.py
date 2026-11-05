@@ -98,6 +98,7 @@ class ModelConfig:
         supports_mode: Whether the model accepts mode parameter.
         supports_language: Whether the model accepts language parameter.
         supports_vad_params: Whether the model accepts fine-grained VAD parameters.
+        supports_keyterms: Whether the model accepts keyterms parameter.
         default_language: Default language code (None = auto-detect).
         default_mode: Default mode (None = not applicable).
         use_translate_endpoint: Whether to use speech_to_text_translate_streaming endpoint.
@@ -112,6 +113,7 @@ class ModelConfig:
     default_mode: str | None
     use_translate_endpoint: bool
     use_translate_method: bool
+    supports_keyterms: bool = False
 
 
 MODEL_CONFIGS: dict[str, ModelConfig] = {
@@ -124,6 +126,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         default_mode=None,
         use_translate_endpoint=False,
         use_translate_method=False,
+        supports_keyterms=False,
     ),
     "saaras:v2.5": ModelConfig(
         supports_prompt=True,
@@ -134,6 +137,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         default_mode=None,
         use_translate_endpoint=True,
         use_translate_method=True,
+        supports_keyterms=False,
     ),
     "saaras:v3": ModelConfig(
         supports_prompt=False,
@@ -144,6 +148,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         default_mode="transcribe",
         use_translate_endpoint=False,
         use_translate_method=False,
+        supports_keyterms=False,
     ),
     "saaras:v4": ModelConfig(
         supports_prompt=False,
@@ -154,6 +159,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         default_mode="transcribe",
         use_translate_endpoint=False,
         use_translate_method=False,
+        supports_keyterms=True,
     ),
 }
 
@@ -165,31 +171,40 @@ class SarvamSTTSettings(STTSettings):
     Parameters:
         prompt: Optional prompt to guide transcription/translation style/context.
             Only applicable to models that support prompts (e.g., saaras:v2.5).
+        mode: Mode of operation for saaras:v3 and saaras:v4 models. Options: transcribe,
+            translate, verbatim, translit, codemix.
+        keyterms: List of domain-specific keywords/keyterms to bias recognition (saaras:v4 only).
         vad_signals: Enable VAD signals in response.
         high_vad_sensitivity: Enable high VAD sensitivity.
         positive_speech_threshold: VAD probability threshold (0.0-1.0) above which
-            a frame is considered speech. Only for saaras:v3.
+            a frame is considered speech. Only for saaras:v3 and saaras:v4.
         negative_speech_threshold: VAD probability threshold (0.0-1.0) below which
-            a frame is considered silence. Only for saaras:v3.
+            a frame is considered silence. Only for saaras:v3 and saaras:v4.
         min_speech_frames: Minimum consecutive speech frames to start a speech
-            segment. Only for saaras:v3.
+            segment. Only for saaras:v3 and saaras:v4.
         first_turn_min_speech_frames: Minimum speech frames for the first user
-            turn. Only for saaras:v3.
+            turn. Only for saaras:v3 and saaras:v4.
         negative_frames_count: Number of silence frames within the window to end
-            a speech segment. Only for saaras:v3.
+            a speech segment. Only for saaras:v3 and saaras:v4.
         negative_frames_window: Sliding window size (in frames) for counting
-            negative frames. Only for saaras:v3.
+            negative frames. Only for saaras:v3 and saaras:v4.
         start_speech_volume_threshold: Volume level (dB) below which audio is
-            too quiet to be speech. Only for saaras:v3.
+            too quiet to be speech. Only for saaras:v3 and saaras:v4.
         interrupt_min_speech_frames: Minimum speech frames to register a
-            barge-in/interruption. Only for saaras:v3.
+            barge-in/interruption. Only for saaras:v3 and saaras:v4.
         pre_speech_pad_frames: Number of audio frames to prepend before detected
-            speech onset. Only for saaras:v3.
+            speech onset. Only for saaras:v3 and saaras:v4.
         num_initial_ignored_frames: Number of leading audio frames to skip at
-            connection start. Only for saaras:v3.
+            connection start. Only for saaras:v3 and saaras:v4.
     """
 
     prompt: str | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    mode: Literal["transcribe", "translate", "verbatim", "translit", "codemix"] | None | _NotGiven = (
+        field(default_factory=lambda: NOT_GIVEN)
+    )
+    keyterms: list[str] | str | None | _NotGiven = field(
+        default_factory=lambda: NOT_GIVEN
+    )
     vad_signals: bool | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     high_vad_sensitivity: bool | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     positive_speech_threshold: float | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
@@ -307,6 +322,8 @@ class SarvamSTTService(STTService):
             model="saaras:v3",
             language=None,
             prompt=None,
+            mode=None,
+            keyterms=None,
             vad_signals=None,
             high_vad_sensitivity=None,
             positive_speech_threshold=None,
@@ -352,8 +369,12 @@ class SarvamSTTService(STTService):
         # Validate parameters against model capabilities
         if default_settings.prompt is not None and not self._config.supports_prompt:
             raise ValueError(f"Model '{resolved_model}' does not support prompt parameter.")
+        if default_settings.mode is not None:
+            mode = default_settings.mode
         if mode is not None and not self._config.supports_mode:
             raise ValueError(f"Model '{resolved_model}' does not support mode parameter.")
+        if default_settings.keyterms is not None and not self._config.supports_keyterms:
+            raise ValueError(f"Model '{resolved_model}' does not support keyterms parameter (saaras:v4 only).")
         if default_settings.language is not None and not self._config.supports_language:
             raise ValueError(
                 f"Model '{resolved_model}' does not support language parameter (auto-detects language)."
@@ -391,6 +412,9 @@ class SarvamSTTService(STTService):
             settings=default_settings,
             **kwargs,
         )
+
+        if sample_rate:
+            self._sample_rate = sample_rate
 
         self._api_key = api_key
 
@@ -621,7 +645,7 @@ class SarvamSTTService(STTService):
             method_kwargs = {
                 "audio": audio_base64,
                 "encoding": encoding,
-                "sample_rate": self.sample_rate,
+                "sample_rate": self.sample_rate or self._init_sample_rate or 16000,
             }
 
             # Use appropriate method based on model configuration
@@ -640,10 +664,11 @@ class SarvamSTTService(STTService):
         logger.debug("Connecting to Sarvam")
 
         try:
+            sample_rate = self.sample_rate or self._init_sample_rate or 16000
             # Build common connection parameters
             connect_kwargs = {
                 "model": self._settings.model,
-                "sample_rate": str(self.sample_rate),
+                "sample_rate": str(sample_rate),
             }
 
             # Enable flush signal when using Pipecat's VAD (not Sarvam's) so that
@@ -686,20 +711,32 @@ class SarvamSTTService(STTService):
             if self._config.supports_mode and self._mode is not None:
                 connect_kwargs["mode"] = self._mode
 
+            # Add keyterms for models that support it (saaras:v4)
+            if getattr(self._config, "supports_keyterms", False) and self._settings.keyterms:
+                import json
+                if isinstance(self._settings.keyterms, (list, tuple)):
+                    connect_kwargs["keyterms"] = json.dumps(list(self._settings.keyterms))
+                else:
+                    connect_kwargs["keyterms"] = str(self._settings.keyterms)
+
             # Prompt support differs across sarvamai versions. Prefer connect-time prompt
             # when available and gracefully degrade if the SDK doesn't accept it.
             if self._settings.prompt is not None and self._config.supports_prompt:
                 connect_kwargs["prompt"] = self._settings.prompt
 
             def _connect_with_sdk_headers(connect_fn, **kwargs):
-                # If prompt is unsupported at connect-time, retry without it.
+                # If prompt or keyterms are unsupported at connect-time, retry without them.
                 # Headers are supplied through request_options because this is a
                 # documented SDK parameter that survives SDK signature changes.
                 request_options = {"additional_headers": self._sdk_headers}
 
                 attempts = [kwargs]
+                if "keyterms" in kwargs:
+                    attempts.append({k: v for k, v in kwargs.items() if k != "keyterms"})
                 if "prompt" in kwargs:
                     attempts.append({k: v for k, v in kwargs.items() if k != "prompt"})
+                if "keyterms" in kwargs and "prompt" in kwargs:
+                    attempts.append({k: v for k, v in kwargs.items() if k not in ("keyterms", "prompt")})
 
                 last_type_error = None
                 for attempt_kwargs in attempts:
@@ -922,7 +959,7 @@ class SarvamSTTService(STTService):
         method_kwargs = {
             "audio": audio_base64,
             "encoding": encoding,
-            "sample_rate": self.sample_rate,
+            "sample_rate": self.sample_rate or self._init_sample_rate or 16000,
         }
         if self._config.use_translate_method:
             await self._socket_client.translate(**method_kwargs)
