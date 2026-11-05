@@ -336,6 +336,11 @@ class SmallestSTTService(WebsocketSTTService):
             logger.debug("Connecting to Smallest STT")
 
             lang_code = self.language_to_service_language(self._settings.language) or "en"
+            if self._settings.model == "pulse-2" and lang_code != "en":
+                logger.warning(
+                    f"{self} model 'pulse-2' is English-only; overriding language '{lang_code}' to 'en'"
+                )
+                lang_code = "en"
             sample_rate = self.sample_rate or self._init_sample_rate or 16000
             query_params = {
                 "model": self._settings.model,
