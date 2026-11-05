@@ -36,7 +36,7 @@ from pipecat.frames.frames import (
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
-from pipecat.services.settings import NOT_GIVEN, STTSettings, _NotGiven
+from pipecat.services.settings import NOT_GIVEN, STTSettings, _NotGiven, is_given
 from pipecat.services.stt_latency import SMALLEST_TTFS_P99
 from pipecat.services.stt_service import WebsocketSTTService
 from pipecat.transcriptions.language import Language, resolve_language
@@ -88,6 +88,9 @@ def language_to_smallest_stt_language(language: Language) -> str:
         Language.UK: "uk",
     }
 
+    if isinstance(language, str) and language.lower() in ("multi", "auto"):
+        return "multi"
+
     return resolve_language(language, LANGUAGE_MAP)
 
 
@@ -95,6 +98,7 @@ class SmallestSTTModel(StrEnum):
     """Available Smallest AI STT models."""
 
     PULSE = "pulse"
+    PULSE_2 = "pulse-2"
 
 
 @dataclass
@@ -113,6 +117,10 @@ class SmallestSTTSettings(STTSettings):
         keywords: Comma-separated ``KEYWORD:INTENSIFIER`` pairs to boost
             recognition of domain-specific words/phrases (e.g. ``"NVIDIA:2"``).
         format: Apply punctuation and capitalization to transcripts.
+        itn_normalize: Inverse text normalization for digits and amounts.
+        eou_timeout_ms: Trailing silence timeout in milliseconds.
+        emotion_detection: Detect speaker emotion (pulse-2 only).
+        gender_detection: Estimate speaker gender (pulse-2 only).
     """
 
     word_timestamps: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
@@ -125,6 +133,10 @@ class SmallestSTTSettings(STTSettings):
     endpointing: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     keywords: str | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     format: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    itn_normalize: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    eou_timeout_ms: int | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    emotion_detection: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    gender_detection: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
 
 
 class SmallestSTTService(WebsocketSTTService):
@@ -331,6 +343,15 @@ class SmallestSTTService(WebsocketSTTService):
                 "endpointing": str(self._settings.endpointing).lower(),
                 "format": str(self._settings.format).lower(),
             }
+
+            if is_given(self._settings.itn_normalize) and self._settings.itn_normalize is not None:
+                query_params["itn_normalize"] = str(self._settings.itn_normalize).lower()
+            if is_given(self._settings.eou_timeout_ms) and self._settings.eou_timeout_ms is not None:
+                query_params["eou_timeout_ms"] = str(self._settings.eou_timeout_ms)
+            if is_given(self._settings.emotion_detection) and self._settings.emotion_detection is not None:
+                query_params["emotion_detection"] = str(self._settings.emotion_detection).lower()
+            if is_given(self._settings.gender_detection) and self._settings.gender_detection is not None:
+                query_params["gender_detection"] = str(self._settings.gender_detection).lower()
 
             # An empty `keywords` value would register a single empty keyword,
             # so omit the parameter entirely when no keywords are configured.
