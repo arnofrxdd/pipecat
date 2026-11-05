@@ -201,6 +201,10 @@ class SmallestSTTService(WebsocketSTTService):
             endpointing=True,
             keywords="",
             format=True,
+            itn_normalize=True,
+            eou_timeout_ms=None,
+            emotion_detection=False,
+            gender_detection=False,
         )
 
         if settings is not None:
@@ -328,9 +332,10 @@ class SmallestSTTService(WebsocketSTTService):
 
             logger.debug("Connecting to Smallest STT")
 
+            lang_code = self.language_to_service_language(self._settings.language) or "en"
             query_params = {
                 "model": self._settings.model,
-                "language": self._settings.language,
+                "language": lang_code,
                 "encoding": self._encoding,
                 "sample_rate": str(self.sample_rate),
                 "word_timestamps": str(self._settings.word_timestamps).lower(),
@@ -394,14 +399,21 @@ class SmallestSTTService(WebsocketSTTService):
 
     async def _receive_messages(self):
         """Receive and process messages from the Smallest Pulse WebSocket."""
-        async for message in self._get_websocket():
-            try:
-                data = json.loads(message)
-                await self._process_response(data)
-            except json.JSONDecodeError:
-                logger.warning(f"{self} received non-JSON message: {message}")
-            except Exception as e:
-                logger.error(f"{self} error processing message: {e}")
+        try:
+            async for message in self._get_websocket():
+                try:
+                    data = json.loads(message)
+                    await self._process_response(data)
+                except json.JSONDecodeError:
+                    logger.warning(f"{self} received non-JSON message: {message}")
+                except Exception as e:
+                    logger.error(f"{self} error processing message: {e}")
+        finally:
+            if self._websocket:
+                logger.warning(
+                    f"{self} WebSocket connection ended: close_code={getattr(self._websocket, 'close_code', None)}, "
+                    f"close_reason={getattr(self._websocket, 'close_reason', None)}"
+                )
 
     async def _process_response(self, data: dict):
         """Process a transcription response from the Pulse API.
