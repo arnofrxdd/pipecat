@@ -13,7 +13,7 @@ voice agents.
 
 import json
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
@@ -27,7 +27,7 @@ from pipecat.frames.frames import (
     TTSAudioRawFrame,
     TTSStoppedFrame,
 )
-from pipecat.services.settings import TTSSettings
+from pipecat.services.settings import NOT_GIVEN, TTSSettings, _NotGiven, is_given
 from pipecat.services.tts_service import InterruptibleTTSService, TextAggregationMode
 from pipecat.utils.tracing.service_decorators import traced_tts
 
@@ -42,7 +42,7 @@ class DeepgramFluxTTSSettings(TTSSettings):
     ``voice`` and is not directly settable.
     """
 
-    pass
+    speed: float | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
 
 
 class DeepgramFluxTTSService(InterruptibleTTSService):
@@ -233,6 +233,9 @@ class DeepgramFluxTTSService(InterruptibleTTSService):
             "encoding=linear16",
             f"sample_rate={self.sample_rate}",
         ]
+
+        if is_given(self._settings.speed) and self._settings.speed is not None and self._settings.speed != 1.0:
+            params.append(f"speed={self._settings.speed}")
 
         if self._mip_opt_out is not None:
             params.append(f"mip_opt_out={str(self._mip_opt_out).lower()}")

@@ -12,7 +12,7 @@ for generating speech from text using various voice models.
 
 import json
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import aiohttp
@@ -26,7 +26,7 @@ from pipecat.frames.frames import (
     TTSAudioRawFrame,
     TTSStoppedFrame,
 )
-from pipecat.services.settings import TTSSettings
+from pipecat.services.settings import NOT_GIVEN, TTSSettings, _NotGiven, is_given
 from pipecat.services.tts_service import TTSService, WebsocketTTSService
 from pipecat.utils.tracing.service_decorators import traced_tts
 
@@ -35,7 +35,7 @@ from pipecat.utils.tracing.service_decorators import traced_tts
 class DeepgramTTSSettings(TTSSettings):
     """Settings for DeepgramTTSService and DeepgramHttpTTSService."""
 
-    pass
+    speed: float | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
 
 
 class DeepgramTTSService(WebsocketTTSService):
@@ -197,6 +197,8 @@ class DeepgramTTSService(WebsocketTTSService):
             params.append(f"model={self._settings.voice}")
             params.append(f"encoding={self._encoding}")
             params.append(f"sample_rate={self.sample_rate}")
+            if is_given(self._settings.speed) and self._settings.speed is not None and self._settings.speed != 1.0:
+                params.append(f"speed={self._settings.speed}")
             if self._mip_opt_out is not None:
                 params.append(f"mip_opt_out={str(self._mip_opt_out).lower()}")
 
