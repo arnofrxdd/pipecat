@@ -154,6 +154,55 @@ class TestMinWordsInterruptionStrategy(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(should_start)
 
+    async def test_bot_not_speaking_vad(self):
+        """When bot is not speaking, VAD starts turn immediately without waiting for STT."""
+        strategy = MinWordsUserTurnStartStrategy(min_words=2)
+
+        should_start = None
+
+        @strategy.event_handler("on_user_turn_started")
+        async def on_user_turn_started(strategy, params):
+            nonlocal should_start
+            should_start = True
+
+        result = await strategy.process_frame(
+            VADUserStartedSpeakingFrame(timestamp=1.0, start_secs=0.0)
+        )
+        self.assertEqual(result, ProcessFrameResult.STOP)
+        self.assertTrue(should_start)
+
+    async def test_bot_speaking_vad(self):
+        """When bot is speaking, VAD does NOT start turn (min_words required to interrupt)."""
+        strategy = MinWordsUserTurnStartStrategy(min_words=2)
+
+        should_start = None
+
+        @strategy.event_handler("on_user_turn_started")
+        async def on_user_turn_started(strategy, params):
+            nonlocal should_start
+            should_start = True
+
+        await strategy.process_frame(BotStartedSpeakingFrame())
+        result = await strategy.process_frame(
+            VADUserStartedSpeakingFrame(timestamp=1.0, start_secs=0.0)
+        )
+        self.assertEqual(result, ProcessFrameResult.CONTINUE)
+        self.assertIsNone(should_start)
+
+        # Single word does not trigger interruption
+        result = await strategy.process_frame(
+            TranscriptionFrame(text="Yeah", user_id="user", timestamp="")
+        )
+        self.assertEqual(result, ProcessFrameResult.CONTINUE)
+        self.assertIsNone(should_start)
+
+        # Two words trigger interruption
+        result = await strategy.process_frame(
+            TranscriptionFrame(text="Wait stop", user_id="user", timestamp="")
+        )
+        self.assertEqual(result, ProcessFrameResult.STOP)
+        self.assertTrue(should_start)
+
 
 class TestVADUserTurnStartStrategy(unittest.IsolatedAsyncioTestCase):
     async def test_vad_strategy(self):

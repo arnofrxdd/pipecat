@@ -14,6 +14,7 @@ from pipecat.frames.frames import (
     Frame,
     InterimTranscriptionFrame,
     TranscriptionFrame,
+    VADUserStartedSpeakingFrame,
 )
 from pipecat.turns.types import ProcessFrameResult
 from pipecat.turns.user_start.base_user_turn_start_strategy import BaseUserTurnStartStrategy
@@ -67,6 +68,12 @@ class MinWordsUserTurnStartStrategy(BaseUserTurnStartStrategy):
             await self._handle_bot_started_speaking(frame)
         elif isinstance(frame, BotStoppedSpeakingFrame):
             await self._handle_bot_stopped_speaking(frame)
+        elif isinstance(frame, VADUserStartedSpeakingFrame):
+            # When bot is silent, any voice starts the user turn immediately (0ms delay),
+            # allowing downstream turn analyzers to track the turn from speech onset.
+            if not self._bot_speaking:
+                await self.trigger_user_turn_started()
+                return ProcessFrameResult.STOP
         elif isinstance(frame, TranscriptionFrame):
             return await self._handle_transcription(frame)
         elif isinstance(frame, InterimTranscriptionFrame) and self._use_interim:
