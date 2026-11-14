@@ -31,6 +31,7 @@ from pipecat.adapters.base_llm_adapter import BaseLLMAdapter
 from pipecat.adapters.schemas.direct_function import DirectFunction, DirectFunctionWrapper
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter
+from pipecat.metrics.metrics import LLMTokenUsage
 from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
@@ -397,6 +398,22 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService, Generic[TAdapter]
         """
         raise NotImplementedError(f"run_inference() not supported by {self.__class__.__name__}")
 
+    async def run_inference_with_usage(
+        self,
+        context: LLMContext,
+        max_tokens: int | None = None,
+        system_instruction: str | None = None,
+    ) -> tuple[str | None, LLMTokenUsage | None]:
+        """Run out-of-band inference returning both response content and normalized token usage.
+        
+        Subclasses that support usage telemetry override this method. The base implementation
+        calls run_inference() and returns None for usage.
+        """
+        content = await self.run_inference(
+            context, max_tokens=max_tokens, system_instruction=system_instruction
+        )
+        return content, None
+
     def service_metadata_frame(self) -> LLMServiceMetadataFrame:
         """The metadata frame this LLM service broadcasts at start.
 
@@ -757,18 +774,28 @@ class LLMService(UserTurnCompletionLLMServiceMixin, AIService, Generic[TAdapter]
             messages=[{"role": "user", "content": f"Conversation history:\n{transcript}"}]
         )
 
-        # Generate summary using run_inference
+        # Generate summary using run_inference_with_usage or run_inference
         # This will be overridden by each LLM service implementation
+        token_usage = None
         try:
-            summary_text = await self.run_inference(
-                summary_context,
-                max_tokens=frame.target_context_tokens,
-                system_instruction=frame.summarization_prompt,
-            )
+            if hasattr(self, "run_inference_with_usage"):
+                summary_text, token_usage = await self.run_inference_with_usage(
+                    summary_context,
+                    max_tokens=frame.target_context_tokens,
+                    system_instruction=frame.summarization_prompt,
+                )
+            else:
+                summary_text = await self.run_inference(
+                    summary_context,
+                    max_tokens=frame.target_context_tokens,
+                    system_instruction=frame.summarization_prompt,
+                )
         except NotImplementedError:
             raise RuntimeError(
                 f"LLM service {self.__class__.__name__} does not implement run_inference"
             )
+
+        self._last_summary_token_usage = token_usage
 
         if not summary_text:
             raise RuntimeError("LLM returned empty summary")

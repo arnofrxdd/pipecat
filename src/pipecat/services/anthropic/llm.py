@@ -282,7 +282,8 @@ class AnthropicLLMService(LLMService[AnthropicLLMAdapter]):
         context: LLMContext,
         max_tokens: int | None = None,
         system_instruction: str | None = None,
-    ) -> str | None:
+        return_usage: bool = False,
+    ) -> str | tuple[str | None, LLMTokenUsage | None] | None:
         """Run a one-shot, out-of-band (i.e. out-of-pipeline) inference with the given LLM context.
 
         Args:
@@ -291,9 +292,10 @@ class AnthropicLLMService(LLMService[AnthropicLLMAdapter]):
                 overrides the service's default max_tokens setting.
             system_instruction: Optional system instruction to use for this inference.
                 If provided, overrides any system instruction in the context.
+            return_usage: If True, returns a tuple of (content, LLMTokenUsage | None).
 
         Returns:
-            The LLM's response as a string, or None if no response is generated.
+            The LLM's response as a string, or (content, usage) if return_usage is True.
         """
         messages = []
         system = NOT_GIVEN
@@ -325,16 +327,50 @@ class AnthropicLLMService(LLMService[AnthropicLLMAdapter]):
             "tools": tools,
             "betas": ["interleaved-thinking-2025-05-14"],
         }
-        thinking = assert_given(self._settings.thinking)
-        if thinking:
-            params["thinking"] = thinking.model_dump(exclude_unset=True)
+        thinking = self._settings.thinking
+        if is_given(thinking) and thinking:
+            if hasattr(thinking, "model_dump"):
+                params["thinking"] = thinking.model_dump(exclude_unset=True)
+            elif isinstance(thinking, dict):
+                params["thinking"] = thinking
 
         params.update(self._settings.extra)
 
         # LLM completion
         response = await self._client.beta.messages.create(**params)
 
-        return next((block.text for block in response.content if hasattr(block, "text")), None)
+        content = next((block.text for block in response.content if hasattr(block, "text")), None)
+        usage = None
+        if getattr(response, "usage", None):
+            in_tok = getattr(response.usage, "input_tokens", 0) or 0
+            out_tok = getattr(response.usage, "output_tokens", 0) or 0
+            cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+            cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+            usage = LLMTokenUsage(
+                prompt_tokens=in_tok,
+                completion_tokens=out_tok,
+                total_tokens=in_tok + out_tok,
+                cache_read_input_tokens=cache_read,
+                cache_creation_input_tokens=cache_create,
+            )
+
+        if return_usage:
+            return content, usage
+        return content
+
+    async def run_inference_with_usage(
+        self,
+        context: LLMContext,
+        max_tokens: int | None = None,
+        system_instruction: str | None = None,
+    ) -> tuple[str | None, LLMTokenUsage | None]:
+        """Run out-of-band inference returning both response content and normalized token usage."""
+        return await self.run_inference(
+            context,
+            max_tokens=max_tokens,
+            system_instruction=system_instruction,
+            return_usage=True,
+        )
 
     # Models known to support assistant message prefilling (a request whose
     # message list ends with an assistant message). Anthropic dropped prefill

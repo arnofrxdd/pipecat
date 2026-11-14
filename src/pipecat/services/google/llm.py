@@ -310,7 +310,8 @@ class GoogleLLMService(LLMService[GeminiLLMAdapter]):
         context: LLMContext,
         max_tokens: int | None = None,
         system_instruction: str | None = None,
-    ) -> str | None:
+        return_usage: bool = False,
+    ) -> str | tuple[str | None, LLMTokenUsage | None] | None:
         """Run a one-shot, out-of-band (i.e. out-of-pipeline) inference with the given LLM context.
 
         Args:
@@ -319,9 +320,10 @@ class GoogleLLMService(LLMService[GeminiLLMAdapter]):
                 overrides the service's default max_tokens setting.
             system_instruction: Optional system instruction to use for this inference.
                 If provided, overrides any system instruction in the context.
+            return_usage: If True, returns a tuple of (content, LLMTokenUsage | None).
 
         Returns:
-            The LLM's response as a string, or None if no response is generated.
+            The LLM's response as a string, or (content, usage) if return_usage is True.
         """
         messages = []
         system = []
@@ -354,12 +356,44 @@ class GoogleLLMService(LLMService[GeminiLLMAdapter]):
         )
 
         # Extract text from response
+        content = None
         if response.candidates and response.candidates[0].content:
             for part in response.candidates[0].content.parts:
                 if part.text:
-                    return part.text
+                    content = part.text
+                    break
 
-        return None
+        usage = None
+        if getattr(response, "usage_metadata", None):
+            meta = response.usage_metadata
+            p_tok = getattr(meta, "prompt_token_count", 0) or 0
+            c_tok = getattr(meta, "candidates_token_count", 0) or 0
+            tot_tok = getattr(meta, "total_token_count", 0) or (p_tok + c_tok)
+            cached_tok = getattr(meta, "cached_content_token_count", 0) or 0
+            usage = LLMTokenUsage(
+                prompt_tokens=p_tok,
+                completion_tokens=c_tok,
+                total_tokens=tot_tok,
+                cache_read_input_tokens=cached_tok,
+            )
+
+        if return_usage:
+            return content, usage
+        return content
+
+    async def run_inference_with_usage(
+        self,
+        context: LLMContext,
+        max_tokens: int | None = None,
+        system_instruction: str | None = None,
+    ) -> tuple[str | None, LLMTokenUsage | None]:
+        """Run out-of-band inference returning both response content and normalized token usage."""
+        return await self.run_inference(
+            context,
+            max_tokens=max_tokens,
+            system_instruction=system_instruction,
+            return_usage=True,
+        )
 
     def _build_generation_params(
         self,
