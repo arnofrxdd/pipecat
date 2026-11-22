@@ -74,11 +74,17 @@ def language_to_smallest_tts_language(language: Language) -> str:
         Language.HI: "hi",
         Language.IT: "it",
         Language.KN: "kn",
+        Language.ML: "ml",
         Language.MR: "mr",
         Language.NL: "nl",
+        Language.OR: "or",
+        Language.PA: "pa",
         Language.PL: "pl",
+        Language.PT: "pt",
         Language.RU: "ru",
+        Language.SV: "sv",
         Language.TA: "ta",
+        Language.TE: "te",
     }
 
     return resolve_language(language, LANGUAGE_MAP, use_base_code=True)
