@@ -29,7 +29,14 @@ class MinWordsUserTurnStartStrategy(BaseUserTurnStartStrategy):
 
     """
 
-    def __init__(self, *, min_words: int, use_interim: bool = True, **kwargs):
+    def __init__(
+        self,
+        *,
+        min_words: int,
+        use_interim: bool = True,
+        allow_transcription_fallback: bool = True,
+        **kwargs,
+    ):
         """Initialize the minimum words bot turn start strategy.
 
         Args:
@@ -37,11 +44,14 @@ class MinWordsUserTurnStartStrategy(BaseUserTurnStartStrategy):
                 start of a user turn.
             use_interim: Whether to consider interim transcription frames for
                 earlier detection.
+            allow_transcription_fallback: When True, transcriptions can start
+                the turn when the bot is silent even if VAD missed it.
             **kwargs: Additional keyword arguments.
         """
         super().__init__(**kwargs)
         self._min_words = min_words
         self._use_interim = use_interim
+        self._allow_transcription_fallback = allow_transcription_fallback
         self._bot_speaking = False
 
     async def handle_user_turn_started(self):
@@ -112,6 +122,12 @@ class MinWordsUserTurnStartStrategy(BaseUserTurnStartStrategy):
         Returns:
             STOP if the minimum word count was reached, CONTINUE otherwise.
         """
+        if not self._bot_speaking and not self._allow_transcription_fallback:
+            # In strict acoustic mode, transcriptions alone cannot start a user turn
+            # when the bot is silent; only VADUserStartedSpeakingFrame can.
+            await self.trigger_reset_aggregation()
+            return ProcessFrameResult.CONTINUE
+
         min_words = self._min_words if self._bot_speaking else 1
 
         word_count = len(frame.text.split())

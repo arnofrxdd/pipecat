@@ -38,18 +38,28 @@ class ProvisionalVADUserTurnStartStrategy(BaseUserTurnStartStrategy):
     immediately, matching the normal fast-turn behavior.
     """
 
-    def __init__(self, *, pause_secs: float = 1.0, use_interim: bool = True, **kwargs):
+    def __init__(
+        self,
+        *,
+        pause_secs: float = 1.0,
+        use_interim: bool = True,
+        allow_transcription_fallback: bool = True,
+        **kwargs,
+    ):
         """Initialize the provisional VAD start strategy.
 
         Args:
             pause_secs: Seconds to pause bot output while waiting for a
                 transcript confirmation.
             use_interim: Whether interim transcriptions confirm the user turn.
+            allow_transcription_fallback: When True, transcriptions can fall
+                through and start turns even when no prior VAD pause was armed.
             **kwargs: Additional keyword arguments.
         """
         super().__init__(**kwargs)
         self._pause_secs = pause_secs
         self._use_interim = use_interim
+        self._allow_transcription_fallback = allow_transcription_fallback
 
         self._bot_speaking = False
         self._provisional_pause_active = False
@@ -142,9 +152,14 @@ class ProvisionalVADUserTurnStartStrategy(BaseUserTurnStartStrategy):
             await self.trigger_user_turn_started()
             return ProcessFrameResult.STOP
 
-        # Fall-through: no pause was armed (and not locked out). This fires
-        # the user turn directly even if the bot is still speaking, because
-        # the pause is only ever armed from _handle_vad_started.
+        # Fall-through: no pause was armed (and not locked out).
+        # In strict acoustic mode, do NOT start the turn on unprovoked transcripts.
+        if not self._allow_transcription_fallback:
+            await self.trigger_reset_aggregation()
+            return ProcessFrameResult.CONTINUE
+
+        # This fires the user turn directly even if the bot is still speaking,
+        # because the pause is only ever armed from _handle_vad_started.
         await self.trigger_user_turn_started()
         return ProcessFrameResult.STOP
 

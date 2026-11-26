@@ -169,6 +169,7 @@ class LLMUserAggregatorParams:
     user_turn_stop_timeout: float = 5.0
     user_idle_timeout: float = 0
     vad_analyzer: VADAnalyzer | None = None
+    allow_transcription_fallback: bool = True
     filter_incomplete_user_turns: bool = False
     user_turn_completion_config: UserTurnCompletionConfig | None = None
 
@@ -1164,6 +1165,15 @@ class LLMUserAggregator(LLMContextAggregator):
 
         # Make sure we really have some text.
         if not text.strip():
+            return
+
+        # Edge Case 5: When allow_transcription_fallback is False and no user turn
+        # is active, uninvited background speech must NOT accumulate into the
+        # aggregation buffer; otherwise it pollutes the next legitimate user turn.
+        if (
+            not self._params.allow_transcription_fallback
+            and not self._user_turn_controller.has_active_user_turn
+        ):
             return
 
         # In realtime mode with a service that doesn't emit user-turn
