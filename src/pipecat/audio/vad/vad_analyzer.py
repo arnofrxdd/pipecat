@@ -15,6 +15,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel
@@ -67,16 +68,24 @@ class VADAnalyzer(ABC):
     Subclasses must implement the core voice confidence calculation.
     """
 
-    def __init__(self, *, sample_rate: int | None = None, params: VADParams | None = None):
+    def __init__(
+        self,
+        *,
+        sample_rate: int | None = None,
+        params: VADParams | None = None,
+        dynamic_tracker: Any | None = None,
+    ):
         """Initialize the VAD analyzer.
 
         Args:
             sample_rate: Audio sample rate in Hz. If None, will be set later.
             params: VAD parameters for detection configuration.
+            dynamic_tracker: Optional dynamic noise floor tracker for adaptive thresholds.
         """
         self._init_sample_rate = sample_rate
         self._sample_rate = 0
         self._params = params or VADParams()
+        self._dynamic_tracker = dynamic_tracker
         self._num_channels = 1
 
         self._vad_buffer = b""
@@ -115,6 +124,16 @@ class VADAnalyzer(ABC):
             Current VAD configuration parameters.
         """
         return self._params
+
+    @property
+    def dynamic_tracker(self) -> Any | None:
+        """Get the dynamic noise floor tracker if configured."""
+        return self._dynamic_tracker
+
+    @dynamic_tracker.setter
+    def dynamic_tracker(self, tracker: Any | None):
+        """Set or update the dynamic noise floor tracker."""
+        self._dynamic_tracker = tracker
 
     @abstractmethod
     def num_frames_required(self) -> int:
@@ -203,7 +222,21 @@ class VADAnalyzer(ABC):
             volume = self._get_smoothed_volume(audio_frames)
             self._prev_volume = volume
 
-            speaking = confidence >= self._params.confidence and volume >= self._params.min_volume
+            if (
+                self._dynamic_tracker
+                and getattr(self._dynamic_tracker, "config", None)
+                and getattr(self._dynamic_tracker.config, "enabled", False)
+            ):
+                is_quiet_state = (self._vad_state == VADState.QUIET)
+                effective_min_volume = self._dynamic_tracker.update_and_get_threshold(
+                    smoothed_volume=volume,
+                    confidence=confidence,
+                    vad_state_quiet=is_quiet_state,
+                )
+            else:
+                effective_min_volume = self._params.min_volume
+
+            speaking = confidence >= self._params.confidence and volume >= effective_min_volume
 
             if speaking:
                 match self._vad_state:

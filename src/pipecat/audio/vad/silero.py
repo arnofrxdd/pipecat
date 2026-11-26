@@ -12,7 +12,7 @@ Supports 8kHz and 16kHz sample rates.
 """
 
 import time
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 from loguru import logger
@@ -135,14 +135,21 @@ class SileroVADAnalyzer(VADAnalyzer):
     with automatic model state management and periodic resets.
     """
 
-    def __init__(self, *, sample_rate: int | None = None, params: VADParams | None = None):
+    def __init__(
+        self,
+        *,
+        sample_rate: int | None = None,
+        params: VADParams | None = None,
+        dynamic_tracker: Any | None = None,
+    ):
         """Initialize the Silero VAD analyzer.
 
         Args:
             sample_rate: Audio sample rate (8000 or 16000 Hz). If None, will be set later.
             params: VAD parameters for detection thresholds and timing.
+            dynamic_tracker: Optional dynamic noise floor tracker for adaptive thresholds.
         """
-        super().__init__(sample_rate=sample_rate, params=params)
+        super().__init__(sample_rate=sample_rate, params=params, dynamic_tracker=dynamic_tracker)
 
         logger.debug("Loading Silero VAD model...")
 
