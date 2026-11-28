@@ -12,6 +12,7 @@ can handle multiple audio formats for Indian language speech recognition.
 """
 
 import base64
+import struct
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -433,6 +434,7 @@ class SarvamSTTService(STTService):
         self._websocket_context = None
         self._socket_client = None
         self._receive_task = None
+        self._needs_wav_header = True
 
         if default_settings.vad_signals:
             self._register_event_handler("on_speech_started")
@@ -617,6 +619,36 @@ class SarvamSTTService(STTService):
         await super().cancel(frame)
         await self._disconnect()
 
+    def _prepare_audio_chunk(self, audio: bytes) -> bytes:
+        """Prepend a streaming 44-byte RIFF/WAVE header to the first audio chunk on each connection.
+
+        Sarvam's WebSocket endpoint strictly enforces audio/wav encoding. Because incoming
+        frames from Pipecat pipelines contain headerless raw PCM, the server's WAV demuxer
+        requires a standard RIFF/WAVE header on the first chunk to initialize stream decoding.
+        """
+        if self._needs_wav_header and not audio.startswith(b"RIFF"):
+            sample_rate = self.sample_rate or self._init_sample_rate or 16000
+            byte_rate = sample_rate * 2  # 16-bit mono PCM
+            wav_header = struct.pack(
+                "<4sI4s4sIHHIIHH4sI",
+                b"RIFF",
+                0x7FFFFFFF,  # Maximum length for continuous streaming
+                b"WAVE",
+                b"fmt ",
+                16,          # Subchunk size for PCM
+                1,           # AudioFormat (1 = PCM)
+                1,           # NumChannels (1 = mono)
+                sample_rate,
+                byte_rate,
+                2,           # BlockAlign
+                16,          # BitsPerSample
+                b"data",
+                0x7FFFFFFF,
+            )
+            self._needs_wav_header = False
+            return wav_header + audio
+        return audio
+
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame | None, None]:
         """Send audio data to Sarvam for transcription.
 
@@ -631,6 +663,7 @@ class SarvamSTTService(STTService):
             return
 
         try:
+            audio = self._prepare_audio_chunk(audio)
             # Convert audio bytes to base64 for Sarvam API
             audio_base64 = base64.b64encode(audio).decode("utf-8")
 
@@ -662,6 +695,7 @@ class SarvamSTTService(STTService):
     async def _connect(self):
         """Connect to Sarvam WebSocket API using the SDK."""
         logger.debug("Connecting to Sarvam")
+        self._needs_wav_header = True
 
         try:
             sample_rate = self.sample_rate or self._init_sample_rate or 16000
@@ -804,6 +838,7 @@ class SarvamSTTService(STTService):
 
     async def _disconnect(self):
         """Disconnect from Sarvam WebSocket API using SDK."""
+        self._needs_wav_header = True
         await self._cancel_keepalive_task()
 
         if self._receive_task:
@@ -950,6 +985,7 @@ class SarvamSTTService(STTService):
         Args:
             silence: Silent 16-bit mono PCM audio bytes.
         """
+        silence = self._prepare_audio_chunk(silence)
         audio_base64 = base64.b64encode(silence).decode("utf-8")
         encoding = (
             self._input_audio_codec
