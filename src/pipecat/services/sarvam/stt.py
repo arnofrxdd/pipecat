@@ -484,9 +484,9 @@ class SarvamSTTService(STTService):
 
         # Only handle VAD frames when not using Sarvam's VAD signals
         if not self._settings.vad_signals:
-            if isinstance(frame, VADUserStartedSpeakingFrame):
+            if isinstance(frame, (VADUserStartedSpeakingFrame, UserStartedSpeakingFrame)):
                 await self._start_metrics()
-            elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            elif isinstance(frame, (VADUserStoppedSpeakingFrame, UserStoppedSpeakingFrame)):
                 if self._socket_client:
                     await self._socket_client.flush()
 
