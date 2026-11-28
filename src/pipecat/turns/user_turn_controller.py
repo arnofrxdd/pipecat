@@ -400,7 +400,11 @@ class UserTurnController(BaseObject):
                         )
                     else:
                         self._consecutive_speaking_timeouts += 1
-                        if self._consecutive_speaking_timeouts >= 2:
+                        # Safety circuit breaker for continuous loud noise lines:
+                        # Decouple continuous speaking allowance from user_turn_stop_timeout.
+                        # Guarantee at least 28.0 seconds of continuous speech before force-closing.
+                        max_speaking_periods = max(8, int(28.0 / max(0.5, self._user_turn_stop_timeout)))
+                        if self._consecutive_speaking_timeouts >= max_speaking_periods:
                             logger.warning(
                                 f"{self}: User turn stuck with user_speaking=True for {self._consecutive_speaking_timeouts} "
                                 f"watchdog periods ({self._consecutive_speaking_timeouts * self._user_turn_stop_timeout:.1f}s). "
